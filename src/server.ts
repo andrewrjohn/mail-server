@@ -3,25 +3,25 @@ import net from "net";
 import fs from "fs";
 import path from "path";
 
-// const server = createServer((req, res) => {
-//   console.log(`${req.method} ${req.url}`);
-//   //   res.write(req.);
-//   // req.on('')
-//   console.log(req.headers);
-//   req.on("data", (chunk) => {
-//     const buffer = Buffer.from(chunk);
-//     console.log(buffer);
-//     console.log(buffer.toString());
-//   });
+const httpServer = createServer((req, res) => {
+  console.log(`${req.method} ${req.url}`);
+  console.log(req.headers);
 
-//   req.on("end", () => {
-//     res.end();
-//   });
-// });
+  res.setHeader("Auth-Status", "OK");
+  res.setHeader("Auth-Server", "127.0.0.1");
+  res.setHeader("Auth-Port", "3131");
+  res.statusCode = 200;
 
-// server.listen(3131, undefined, undefined, () => {
-//   console.log("SMTP server is running on port 3131");
-// });
+  res.end();
+
+  req.on("end", () => {
+    res.end();
+  });
+});
+
+httpServer.listen(3001, undefined, undefined, () => {
+  console.log("HTTP server is running on port 3001");
+});
 
 const DOMAIN = "smtp.weaklytyped.com";
 
