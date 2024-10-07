@@ -1,26 +1,60 @@
 import { createServer } from "http";
+import { prisma } from "./prisma";
 import net from "net";
 import fs from "fs";
 import path from "path";
+import { credentials, imapServer } from "./imap.server";
+import { Redis } from "./redis";
 
-const httpServer = createServer((req, res) => {
-  console.log(`${req.method} ${req.url}`);
-  console.log(req.headers);
-
-  res.setHeader("Auth-Status", "OK");
-  res.setHeader("Auth-Server", "127.0.0.1");
-  res.setHeader("Auth-Port", "3131");
-  res.statusCode = 200;
-
-  res.end();
-
+const httpServer = createServer(async (req, res) => {
   req.on("end", () => {
     res.end();
   });
-});
 
-httpServer.listen(3001, undefined, undefined, () => {
-  console.log("HTTP server is running on port 3001");
+  const protocol = req.headers["auth-protocol"];
+  console.log(`${req.method} ${req.url} - ${protocol}`);
+
+  const error = (message: string) => {
+    res.setHeader("Auth-Status", message);
+    res.statusCode = 200;
+    res.end();
+  };
+
+  if (typeof protocol !== "string") {
+    return error("Invalid protocol");
+  }
+
+  switch (protocol.toLowerCase()) {
+    case "smtp":
+      res.setHeader("Auth-Status", "OK");
+      res.setHeader("Auth-Server", "127.0.0.1");
+      res.setHeader("Auth-Port", "3131");
+      res.statusCode = 200;
+
+      res.end();
+      break;
+    case "imap":
+      const user = req.headers["auth-user"];
+      const pass = req.headers["auth-pass"];
+
+      const username = user?.toString().replace("@weaklytyped.com", "");
+      const inbox = await prisma.inbox.findFirst({
+        where: { user: username, password: pass?.toString().trim() },
+      });
+
+      if (!inbox) {
+        return error("Invalid credentials");
+      }
+
+      res.setHeader("Auth-Status", "OK");
+      res.setHeader("Auth-Server", "127.0.0.1");
+      res.setHeader("Auth-Port", "3002");
+      res.statusCode = 200;
+      res.end();
+      break;
+    default:
+      return error(`Unsupported protocol: ${protocol}`);
+  }
 });
 
 const DOMAIN = "smtp.weaklytyped.com";
@@ -41,7 +75,16 @@ if (!fs.existsSync(emailsDir)) {
   fs.mkdirSync(emailsDir);
 }
 
-const server = net.createServer((socket) => {
+const parseAddress = (str: string) => {
+  const match = str.match(/<(.+?)>/im);
+  if (!match) {
+    return str;
+  }
+
+  return match[1].trim();
+};
+
+const smtpServer = net.createServer((socket) => {
   socket.write("220 WeaklyTyped SMTP Server\r\n");
 
   let from = "";
@@ -49,19 +92,49 @@ const server = net.createServer((socket) => {
   let emailData = "";
   let isDataMode = false;
 
-  socket.on("data", (data) => {
+  const resetSession = () => {
+    from = "";
+    to = "";
+    emailData = "";
+    isDataMode = false;
+  };
+
+  socket.on("data", async (data) => {
     const command = data.toString().trim();
 
     if (isDataMode) {
       const lines = command.split("\n");
       for (const line of lines) {
         if (line.trim() === ".") {
+          const user = to.replace("@weaklytyped.com", "").trim();
+          const inbox = await prisma.inbox.findFirst({ where: { user } });
+          if (inbox) {
+            await prisma.email.create({
+              data: {
+                inboxId: inbox.id,
+                from: from.trim(),
+                content: emailData,
+                uid: inbox.uidNext,
+              },
+            });
+
+            await prisma.inbox.update({
+              where: { user },
+              data: { uidNext: { increment: 1 } },
+            });
+          }
+
           console.log(`Message received from ${from} to ${to}`);
+          // await Redis.saveEmail(
+          //   to.replace("@weaklytyped.com", "").trim(),
+          //   from.trim(),
+          //   emailData
+          // );
           isDataMode = false;
-          fs.writeFileSync(
-            path.join(emailsDir, `${+new Date()}.txt`),
-            emailData
-          );
+          // fs.writeFileSync(
+          //   path.join(emailsDir, `${+new Date()}.txt`),
+          //   emailData
+          // );
           socket.write(`250 OK\r\n`);
           break;
         }
@@ -82,44 +155,44 @@ const server = net.createServer((socket) => {
           socket.write(`250 OK\r\n`);
           break;
         case COMMANDS.MAIL:
-          from = command
-            .split(" ")[1]
-            .trim()
-            .toLowerCase()
-            .replace("from:", "")
-            .replace("<", "")
-            .replace(">", "");
+          resetSession();
+
+          from = parseAddress(command);
 
           socket.write(`250 OK\r\n`);
           break;
         case COMMANDS.RECIPIENT:
-          to = command
-            .split(" ")[1]
-            .trim()
-            .toLowerCase()
-            .replace("to:", "")
-            .replace("<", "")
-            .replace(">", "");
+          if (!from) {
+            socket.write(`503 \r\n`);
+            break;
+          }
 
-          socket.write(`250 OK\r\n`);
+          to = parseAddress(command);
+
+          if (!to.toLowerCase().endsWith(`@weaklytyped.com`)) {
+            socket.write(`550 \r\n`);
+          } else {
+            socket.write(`250 OK\r\n`);
+          }
           break;
         case COMMANDS.DATA:
+          if (!from || !to) {
+            socket.write(`503 \r\n`);
+            break;
+          }
+
           socket.write(`354 \r\n`);
 
           isDataMode = true;
 
           break;
         case COMMANDS.RESET:
-          from = "";
-          to = "";
-          emailData = "";
+          resetSession();
 
           socket.write(`250 OK\r\n`);
           break;
         case COMMANDS.QUIT:
-          from = "";
-          to = "";
-          emailData = "";
+          resetSession();
 
           socket.write(`221 OK\r\n`);
           socket.end();
@@ -130,6 +203,14 @@ const server = net.createServer((socket) => {
   });
 });
 
-server.listen(3131, undefined, () => {
+smtpServer.listen(3131, undefined, () => {
   console.log("SMTP server is running on port 3131");
+});
+
+httpServer.listen(3001, undefined, undefined, () => {
+  console.log("HTTP server is running on port 3001");
+});
+
+imapServer.listen(3002, undefined, () => {
+  console.log("IMAP server is running on port 3002");
 });
