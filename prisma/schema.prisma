@@ -15,15 +15,22 @@ model Inbox {
   user     String  @unique
   password String
   emails   Email[]
-  uidNext  Int
+  uidNext  Int     @default(1)
 }
 
 model Email {
-  id          Int      @id @default(autoincrement())
-  from        String
-  content     String
-  inbox       Inbox    @relation(fields: [inboxId], references: [id])
-  inboxId     Int
-  createdAt   DateTime @default(now())
-  uid         Int
+  id             Int      @id @default(autoincrement())
+  from           String
+  content        String
+  inbox          Inbox    @relation(fields: [inboxId], references: [id])
+  inboxId        Int
+  createdAt      DateTime @default(now())
+  uid            Int      @unique
+  sequenceNumber Int      @unique
+  sizeBytes      Int
+  seen           Boolean  @default(false)
+  deleted        Boolean  @default(false)
+  flagged        Boolean  @default(false)
+  draft          Boolean  @default(false)
+  answered       Boolean  @default(false)
 }

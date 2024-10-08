@@ -109,12 +109,18 @@ const smtpServer = net.createServer((socket) => {
           const user = to.replace("@weaklytyped.com", "").trim();
           const inbox = await prisma.inbox.findFirst({ where: { user } });
           if (inbox) {
+            const numMessages = await prisma.email.count({
+              where: { inboxId: inbox.id },
+            });
+
             await prisma.email.create({
               data: {
                 inboxId: inbox.id,
                 from: from.trim(),
                 content: emailData,
                 uid: inbox.uidNext,
+                sequenceNumber: numMessages + 1,
+                sizeBytes: Buffer.from(emailData).byteLength,
               },
             });
 
