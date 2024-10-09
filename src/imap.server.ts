@@ -1,8 +1,6 @@
 import net from "net";
-import { Redis } from "./redis";
 import { prisma } from "./prisma";
 import { Inbox, Prisma } from "@prisma/client";
-import { parseHeader } from "./parsing";
 
 const domain = "@weaklytyped.com";
 
@@ -134,11 +132,8 @@ export const imapServer = net.createServer((socket) => {
             }
           }
 
-          // Spec: https://www.rfc-editor.org/rfc/rfc2971.html
-          await Redis.updateLastAccessed(
-            currentInbox.user,
-            `${Object.values(kv).join(" ")}`
-          );
+          // Spec for possible fields: https://www.rfc-editor.org/rfc/rfc2971.html
+          // TODO: Save to DB
 
           sendResponse("*", "ID", `NIL`);
           sendResponse(tag, "OK", "ID completed");
